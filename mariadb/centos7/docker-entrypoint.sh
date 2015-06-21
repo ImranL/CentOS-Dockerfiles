@@ -14,7 +14,12 @@ if [ "$1" = 'mysqld_safe' ]; then
 			echo >&2 '  Did you forget to add -e MYSQL_ROOT_PASSWORD=... ?'
 			exit 1
 		fi
-		
+
+		if [ -z "$MYSQL_REPLICATION_LOCATION" -o -z "$MYSQL_REPLICATION_ID" -o -z "$MYSQL_REPLICATION_NAME"]; then
+			echo >&2 'error: need replication bin location, replication ID and replication name'
+			exit 1
+		fi
+
 		echo 'Running mysql_install_db ...'
 		mysql_install_db --datadir="$DATADIR"
 		echo 'Finished mysql_install_db'
@@ -30,7 +35,9 @@ if [ "$1" = 'mysqld_safe' ]; then
 			GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION ;
 			DROP DATABASE IF EXISTS test ;
 		EOSQL
-		
+
+		# Use the original database/user/pass setup functionality to bootstrap replication instead
+
 		if [ "$MYSQL_DATABASE" ]; then
 			echo "CREATE DATABASE IF NOT EXISTS \`$MYSQL_DATABASE\` ;" >> "$tempSqlFile"
 		fi
@@ -40,8 +47,17 @@ if [ "$1" = 'mysqld_safe' ]; then
 			
 			if [ "$MYSQL_DATABASE" ]; then
 				echo "GRANT ALL ON \`$MYSQL_DATABASE\`.* TO '$MYSQL_USER'@'%' ;" >> "$tempSqlFile"
+				
+				# Add conf
+
+				sed '/\[mysqld\]/a server-id\t= ${MYSQL_REPLICATION_ID}\nrelay-log\t= \/var\/log\/mariadb\/maria-relay-bin.log\nlog_bin\t\t= \/var\/log\/mariadb\/maria-bin.log\nbinlog_do_db\t= ${MYSQL_DATABASE}' /etc/my.cnf.d/server.cnf
+
+				echo "CHANGE MASTER TO MASTER_HOST='${MYSQL_REPLICATION_MASTERIP}',MASTER_USER='${MYSQL_REPLICATION_MASTERUSR}', MASTER_PASSWORD='${MYSQL_REPLICATION_MASTERPWD}', MASTER_LOG_FILE='maria-bin.000001', MASTER_LOG_POS=  ${MYSQL_REPLICATION_LOCATION};" >> "$tempSqlFile"
+
 			fi
 		fi
+
+		
 		
 		echo 'FLUSH PRIVILEGES ;' >> "$tempSqlFile"
 		
@@ -51,4 +67,6 @@ if [ "$1" = 'mysqld_safe' ]; then
 	chown -R mysql:mysql "$DATADIR"
 fi
 
+exec "$@"
+mysqld_safe stop
 exec "$@"
